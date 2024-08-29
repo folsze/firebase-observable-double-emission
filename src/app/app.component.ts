@@ -135,7 +135,7 @@ export class AppComponent implements OnInit {
     const game$ = docData(gameDocRef, { idField: 'id' }).pipe(
       map(data => (data ? (data as Game) : null)),
       tap((data) => {
-        console.log("🟩 intrinsic stream emission:", data);
+        console.log("🔵 intrinsic stream emission:", data);
       })
     );
 
@@ -150,7 +150,7 @@ export class AppComponent implements OnInit {
         const currentGameJSON = JSON.stringify(currentGame);
         const newGameJSON = JSON.stringify(game);
         if (currentGameJSON === newGameJSON) {
-          console.error("SAME GAME EMISSION", currentGameJSON);
+          console.error("SAME GAME EMISSION DETECTED", currentGameJSON);
         }
         return game;
       })
@@ -178,7 +178,7 @@ export class AppComponent implements OnInit {
     const gameDocRef = doc(this.firestore, 'games', this.gameId);
     const newStatus = `Updated at ${new Date().toLocaleTimeString()}`;
 
-    console.log("Gonna update game now:")
+    console.log("🟨 Gonna update game now:")
     updateDoc(gameDocRef, { status: newStatus }).then(() => {
       // console.log('Game status updated to:', newStatus);
     }).catch(error => {
