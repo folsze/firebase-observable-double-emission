@@ -1,13 +1,38 @@
 import { Component, OnInit } from '@angular/core';
 import { BehaviorSubject, Observable, Subscription } from 'rxjs';
 import { catchError, distinctUntilChanged, first, map, tap } from 'rxjs/operators';
-import { doc, docData, Firestore, updateDoc, setDoc, collection, getDocs } from '@angular/fire/firestore';
+import { doc, docData, Firestore, getDoc, updateDoc, setDoc, collection, getDocs } from '@angular/fire/firestore';
 import { AsyncPipe, NgForOf, NgIf } from '@angular/common';
 
 interface Game {
   id: string;
   users: { id: string; hasLeft: boolean }[];
   status?: string; // Optional game status for demo purposes
+}
+
+function deepEqual(obj1: any, obj2: any): boolean {
+  if (obj1 === obj2) return true;
+
+  if (typeof obj1 !== 'object' || obj1 === null || typeof obj2 !== 'object' || obj2 === null) {
+    return false;
+  }
+
+  const keys1 = Object.keys(obj1);
+  const keys2 = Object.keys(obj2);
+
+  if (keys1.length !== keys2.length) return false;
+
+  for (let key of keys1) {
+    if (!keys2.includes(key)) return false;
+
+    if (typeof obj1[key] === 'object' && typeof obj2[key] === 'object') {
+      if (!deepEqual(obj1[key], obj2[key])) return false;
+    } else if (obj1[key] !== obj2[key]) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 @Component({
@@ -34,9 +59,9 @@ interface Game {
 export class AppComponent implements OnInit {
   private gameSubject$: BehaviorSubject<Game | null> = new BehaviorSubject<Game | null>(null);
   private gameSubscription: Subscription | undefined;
-  private isCurrentlyLocked = false;
   private currentUserId = 'user123'; // Simulate a logged-in user
   private gameId = 'game123'; // Simulate a game document ID
+  private streamInitialized = false; // Flag to prevent multiple stream creations
 
   game$: Observable<Game | null> = this.gameSubject$.asObservable();
 
@@ -74,27 +99,44 @@ export class AppComponent implements OnInit {
     console.log(`Game with ID ${gameId} created.`);
   }
 
-  private loadGame(gameId: string, userId: string): void {
-    this.getGameById(gameId, userId).pipe(
-      first(),
-      tap(game => {
-        if (!game) {
-          throw new Error("assertion failed");
-        }
-        this.setGameStreamIfNull(game, userId);
-      }),
-      catchError(async (error) => {
-        console.error('Load Game Error', error);
-      })
-    ).subscribe();
+  private async loadGame(gameId: string, userId: string): Promise<void> {
+    if (!this.streamInitialized) {
+      console.log("🟩 Initializing stream using docData...");
+      this.streamInitialized = true;
+      this.setGameStream(gameId, userId);
+    } else {
+      console.log("Fetching game data without stream...");
+      const gameData = await this.fetchGameWithoutStream(gameId, userId);
+      if (gameData) {
+        this.gameSubject$.next(gameData);
+      }
+    }
   }
 
-  private getGameById(gameId: string, currentUserId: string): Observable<Game | null> {
+  private setGameStream(gameId: string, userId: string): void {
+    this.gameSubscription = this.getGameDocData(gameId, userId).pipe(
+      // distinctUntilChanged((prev, curr) => deepEqual(prev, curr)) // TODO: NOTE THIS: this would ofc prevent double emissions, but not intrinsically prevent emissions. And it's computationally expensive with large games.
+    ).subscribe(gameData => {
+      if (gameData === null) {
+        this.gameSubscription?.unsubscribe();
+      }
+      console.log("🟦 Stream Emission, nexting", gameData);
+      const currentGame = this.gameSubject$.getValue();
+      if (currentGame && deepEqual(currentGame, gameData)) {
+        console.error("SAME GAME EMISSION", JSON.stringify(gameData));
+      }
+      this.gameSubject$.next(gameData);
+    });
+  }
+
+  private getGameDocData(gameId: string, currentUserId: string): Observable<Game | null> {
     const gameDocRef = doc(this.firestore, 'games', gameId);
-    console.log("🟩 CALLING DOC_DATA");
 
     const game$ = docData(gameDocRef, { idField: 'id' }).pipe(
-      map(data => (data ? (data as Game) : null))
+      map(data => (data ? (data as Game) : null)),
+      tap((data) => {
+        console.log("🟩 intrinsic stream emission:", data);
+      })
     );
 
     return game$.pipe(
@@ -111,23 +153,24 @@ export class AppComponent implements OnInit {
           console.error("SAME GAME EMISSION", currentGameJSON);
         }
         return game;
-      }),
-      distinctUntilChanged((prev, curr) => JSON.stringify(prev) === JSON.stringify(curr))
+      })
     );
   }
 
-  private setGameStreamIfNull(game: Game, userId: string): void {
-    const currentValue = this.gameSubject$.getValue();
-    if (currentValue === null && !this.isCurrentlyLocked) {
-      this.isCurrentlyLocked = true;
-      this.gameSubscription = this.getGameById(game.id, userId).pipe(distinctUntilChanged()).subscribe(gameData => {
-        if (gameData === null) {
-          this.gameSubscription?.unsubscribe();
-        }
-        console.log("🟦 Stream Emission, nexting", gameData);
-        this.gameSubject$.next(gameData);
-        this.isCurrentlyLocked = false;
-      });
+  private async fetchGameWithoutStream(gameId: string, userId: string): Promise<Game | null> {
+    const gameDocRef = doc(this.firestore, 'games', gameId);
+    const docSnapshot = await getDoc(gameDocRef);
+
+    if (docSnapshot.exists()) {
+      const game = docSnapshot.data() as Game;
+      const currentUser = game.users.find(user => user.id === userId);
+      if (!currentUser || currentUser.hasLeft) {
+        return null;
+      }
+      return game;
+    } else {
+      console.log("Game document not found!");
+      return null;
     }
   }
 
@@ -135,8 +178,9 @@ export class AppComponent implements OnInit {
     const gameDocRef = doc(this.firestore, 'games', this.gameId);
     const newStatus = `Updated at ${new Date().toLocaleTimeString()}`;
 
+    console.log("Gonna update game now:")
     updateDoc(gameDocRef, { status: newStatus }).then(() => {
-      console.log('Game status updated to:', newStatus);
+      // console.log('Game status updated to:', newStatus);
     }).catch(error => {
       console.error('Error updating game:', error);
     });
