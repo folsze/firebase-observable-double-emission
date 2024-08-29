@@ -1,0 +1,7 @@
+{
+  "name": "firebase-observable-double-emission",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular-standalone"
+}
